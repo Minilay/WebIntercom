@@ -1,4 +1,4 @@
 *.code-workspace
 .vscode
 .micropico
-# credentials.py
+credentials.py
