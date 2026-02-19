@@ -2,3 +2,5 @@
 .vscode
 .micropico
 credentials.py
+pibody
+test.py
