@@ -1,0 +1,139 @@
+from machine import Pin, reset
+from neopixel import NeoPixel
+from time import sleep_ms, ticks_ms, ticks_diff
+from credentials import SSID, PASSWORD, BOT_TOKEN, CHAT_ID
+import gc
+
+from modules import Buzzer, TelegramBot, WiFi
+
+# --- CONFIGURATION ---
+PIN_BUZZER     = 2
+PIN_INPUT      = 14 
+PIN_RELAY      = 15
+PIN_LED_WS2812 = 16
+PIN_INTERNAL_LED = "LED"
+
+# Settings
+LOUDNESS       = 1
+OPEN_DURATION  = 3000   # ms
+POLL_INTERVAL  = 2000   # ms
+DEBOUNCE_MS    = 500    # ms
+
+# --- HARDWARE INITIALIZATION ---
+buzzer = Buzzer(PIN_BUZZER)
+rgb_led = NeoPixel(Pin(PIN_LED_WS2812), 1)
+onboard_led = Pin(PIN_INTERNAL_LED, Pin.OUT)
+relay = Pin(PIN_RELAY, Pin.OUT, value=0) # Ensure relay starts OFF
+intercom_input = Pin(PIN_INPUT, Pin.IN, Pin.PULL_DOWN)
+
+# Turned on
+rgb_led[0] = (0, 0, 10)
+rgb_led.write()
+
+# Internet Stuff Initialization
+wifi = WiFi()
+wifi.connect(SSID, PASSWORD, timeout=20)
+
+tg = TelegramBot(BOT_TOKEN, CHAT_ID)
+
+# --- STATE MANAGEMENT ---
+# Using a flag to move work from ISR to the main loop
+ring_detected = False
+last_trigger = 0
+
+def input_handler(pin):
+    """
+    ISR: Keep this extremely minimal. 
+    Just set a flag and get out.
+    """
+    global ring_detected, last_trigger
+    now = ticks_ms()
+    if ticks_diff(now, last_trigger) > DEBOUNCE_MS:
+        ring_detected = True
+        last_trigger = now
+
+# Attach Interrupt
+intercom_input.irq(trigger=Pin.IRQ_RISING, handler=input_handler)
+
+# --- CORE FUNCTIONS ---
+
+
+def flash_led(color):
+    for i in range(11):
+        rgb_led[0] = color if i % 2 else (0, 0, 0)
+        rgb_led.write()
+        sleep_ms(50)
+
+def open_door():
+    """Triggers the relay with safety checks"""
+    print("Action: Opening Door")
+    relay.on()
+    sleep_ms(OPEN_DURATION) 
+    relay.off()
+    tg.send_message("Vio-la")
+
+def process_telegram_commands():
+    """Handles incoming bot commands"""
+    try:
+        data, sender_id = tg.request_data()
+        if not data or not data.startswith("/"):
+            return
+
+        # Clean command string
+        cmd = data.lower().split("@")[0].strip("/")
+        
+        if cmd == "open" or cmd == "force":
+            open_door()
+        elif cmd == "status":
+            tg.send_message("System Online")
+            
+    except Exception as e:
+        print(f"Telegram Error: {e}")
+
+def main():
+    global ring_detected
+    flash_led((0, 20, 0))
+    buzzer.volume(LOUDNESS)
+    buzzer.boop()
+    buzzer.beep()
+
+    print("System Booted. Monitoring intercom...")
+    tg.send_message("WebIntercom Online")
+
+    
+    while True:
+        try:
+            # 0. Reconnect to wi-fi, just in case. 
+            if not wifi.is_connected():
+                wifi.connect(SSID, PASSWORD)
+                continue
+            # 1. Check if the Intercom rang (Flag set by ISR)
+            if ring_detected:
+                print("Intercom Triggered!")
+                buzzer.play_alert_sound()
+                flash_led((255, 100, 0))
+                tg.send_message("Knock-Knock!")
+                ring_detected = False # Reset flag
+            
+            # 2. Check for Telegram commands
+            process_telegram_commands()
+            
+            # 3. Heartbeat blink
+            onboard_led.on()
+            sleep_ms(100)
+            onboard_led.off()
+            
+            # 4. Periodic garbage collection to prevent memory fragmentation
+            gc.collect()
+            
+            # 5. Main loop delay
+            sleep_ms(POLL_INTERVAL)
+            
+        except Exception as e:
+            print(f"Main loop error: {e}")
+            # Don't hard reset - recover gracefully
+            sleep_ms(2000)
+
+if __name__ == "__main__":
+    # Start main application
+    main()

@@ -9,7 +9,6 @@ class Buzzer(PWM):
     def __init__(self, pin):
         super().__init__(pin)
         self._volume = 0.5
-        self._duty = 0
         self.freq(560)
 
     def duty(self, duty_cycle:float|None = None):
@@ -32,7 +31,7 @@ class Buzzer(PWM):
         self.duty(duty / 2)
 
     def make_sound(self, freq, duration, volume = None):
-        vol = self._volume if volume is None else volume
+        vol = volume if volume else self._volume
         self.freq(freq)
         self.duty(volume2duty(vol))
         sleep(duration)
